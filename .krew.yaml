@@ -31,33 +31,33 @@ spec:
         os: darwin
         arch: amd64
     uri: https://github.com/gshaibi/kubectl-create-resource/releases/download/v0.1.0/kubectl-create-resource-darwin-amd64.tar.gz
-    sha256: "REPLACE_WITH_SHA256"
+    sha256: cc03783b5d3b60f9f2537e0ef209c473cc8645a251854737231f7a1a4a30ae6d
     bin: kubectl-create-resource
   - selector:
       matchLabels:
         os: darwin
         arch: arm64
     uri: https://github.com/gshaibi/kubectl-create-resource/releases/download/v0.1.0/kubectl-create-resource-darwin-arm64.tar.gz
-    sha256: "REPLACE_WITH_SHA256"
+    sha256: 20142da02d30ab24e1920f417747a010621a8ac4f2d43f865d16f55a45f7b237
     bin: kubectl-create-resource
   - selector:
       matchLabels:
         os: linux
         arch: amd64
     uri: https://github.com/gshaibi/kubectl-create-resource/releases/download/v0.1.0/kubectl-create-resource-linux-amd64.tar.gz
-    sha256: "REPLACE_WITH_SHA256"
+    sha256: 3cadbf917de954164734ef6d3ec6dc869a15c186535f042d54461cca76be3c43
     bin: kubectl-create-resource
   - selector:
       matchLabels:
         os: linux
         arch: arm64
     uri: https://github.com/gshaibi/kubectl-create-resource/releases/download/v0.1.0/kubectl-create-resource-linux-arm64.tar.gz
-    sha256: "REPLACE_WITH_SHA256"
+    sha256: 52c49e68e1047003ae15a9f6b3d6b65dc56d21714a9945b92e5617b33e8cf83f
     bin: kubectl-create-resource
   - selector:
       matchLabels:
         os: windows
         arch: amd64
     uri: https://github.com/gshaibi/kubectl-create-resource/releases/download/v0.1.0/kubectl-create-resource-windows-amd64.zip
-    sha256: "REPLACE_WITH_SHA256"
+    sha256: d82a08eaa6d63baacacc9fa6f4277286e013e513c37609c76e97351d0c1d9ffb
     bin: kubectl-create-resource.exe
