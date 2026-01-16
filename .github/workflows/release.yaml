@@ -1,0 +1,67 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Build binaries
+        run: |
+          mkdir -p dist
+          
+          # Darwin AMD64
+          GOOS=darwin GOARCH=amd64 go build -ldflags="-X main.version=${{ github.ref_name }}" -o dist/kubectl-create-resource ./cmd/kubectl-create-resource
+          tar -czvf dist/kubectl-create-resource-darwin-amd64.tar.gz -C dist kubectl-create-resource
+          rm dist/kubectl-create-resource
+          
+          # Darwin ARM64
+          GOOS=darwin GOARCH=arm64 go build -ldflags="-X main.version=${{ github.ref_name }}" -o dist/kubectl-create-resource ./cmd/kubectl-create-resource
+          tar -czvf dist/kubectl-create-resource-darwin-arm64.tar.gz -C dist kubectl-create-resource
+          rm dist/kubectl-create-resource
+          
+          # Linux AMD64
+          GOOS=linux GOARCH=amd64 go build -ldflags="-X main.version=${{ github.ref_name }}" -o dist/kubectl-create-resource ./cmd/kubectl-create-resource
+          tar -czvf dist/kubectl-create-resource-linux-amd64.tar.gz -C dist kubectl-create-resource
+          rm dist/kubectl-create-resource
+          
+          # Linux ARM64
+          GOOS=linux GOARCH=arm64 go build -ldflags="-X main.version=${{ github.ref_name }}" -o dist/kubectl-create-resource ./cmd/kubectl-create-resource
+          tar -czvf dist/kubectl-create-resource-linux-arm64.tar.gz -C dist kubectl-create-resource
+          rm dist/kubectl-create-resource
+          
+          # Windows AMD64
+          GOOS=windows GOARCH=amd64 go build -ldflags="-X main.version=${{ github.ref_name }}" -o dist/kubectl-create-resource.exe ./cmd/kubectl-create-resource
+          cd dist && zip kubectl-create-resource-windows-amd64.zip kubectl-create-resource.exe && cd ..
+          rm dist/kubectl-create-resource.exe
+
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum *.tar.gz *.zip > checksums.txt
+          cat checksums.txt
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/checksums.txt
+          generate_release_notes: true
