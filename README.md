@@ -5,6 +5,7 @@ A kubectl plugin that generalizes resource creation to **all** Kubernetes resour
 ## Features
 
 - **Universal Resource Creation**: Create any Kubernetes resource type, not just the limited set supported by `kubectl create`
+- **Template Mode**: Use existing resources as templates - opens in your editor for easy modification
 - **Interactive Mode**: Wizard-style prompts guide you through required and optional fields
 - **Flag Mode**: Scriptable with `--set` flags for automation
 - **CRD Support**: Automatically discovers Custom Resource Definitions from your cluster
@@ -42,9 +43,34 @@ Discover all resource types available in your cluster:
 kubectl create-resource --list
 ```
 
+### Template Mode (Recommended for Complex Resources)
+
+Use an existing resource as a template - the manifest opens in your editor:
+
+```bash
+# Use existing queue as template
+kubectl create-resource queue --from=existing-queue --name=my-new-queue
+
+# Use existing deployment as template
+kubectl create-resource deployment --from=my-deployment -n my-namespace --name=new-deployment
+
+# Preview the template without opening editor
+kubectl create-resource deployment --from=my-deployment --dry-run
+```
+
+The editor used is determined by (in order):
+1. `$EDITOR` environment variable
+2. `$VISUAL` environment variable  
+3. `vim`, `vi`, or `nano` (whichever is available)
+
+When using `--from`:
+- Server-generated fields are automatically removed (uid, resourceVersion, status, etc.)
+- The new name is set (or "-copy" is appended if no name provided)
+- You can edit the full YAML before creation
+
 ### Interactive Mode
 
-Create a resource interactively - you'll be prompted for required fields:
+Create a resource interactively - you'll be prompted for fields:
 
 ```bash
 kubectl create-resource deployment
@@ -53,9 +79,8 @@ kubectl create-resource deployment
 Example session:
 ```
 Creating deployments in namespace default
-? name (required) [Name of the resource]: my-app
-? namespace [Namespace of the resource]: default
-deployments/my-app created
+  Name of the resource
+metadata.name *: my-app
 ```
 
 ### Flag Mode
@@ -69,17 +94,21 @@ kubectl create-resource deployment \
   --set=spec.replicas=3 \
   --set=spec.selector.matchLabels.app=my-app \
   --set=spec.template.metadata.labels.app=my-app \
-  --set=spec.template.spec.containers[0].name=app \
-  --set=spec.template.spec.containers[0].image=nginx:latest
+  --set='spec.template.spec.containers[0].name=app' \
+  --set='spec.template.spec.containers[0].image=nginx:latest'
 ```
+
+**Note**: Quote values containing brackets to prevent shell glob expansion.
 
 ### Mixed Mode
 
-Use flags for known values and get prompted for the rest:
+Combine `--from` with `--set` to pre-modify specific fields:
 
 ```bash
-kubectl create-resource configmap --name=my-config
-# You'll be prompted for data fields
+kubectl create-resource queue \
+  --from=existing-queue \
+  --name=new-queue \
+  --set='spec.resources.cpu.quota=500'
 ```
 
 ### Dry-Run Mode
@@ -88,15 +117,7 @@ Preview the generated manifest without creating the resource:
 
 ```bash
 kubectl create-resource deployment --name=my-app --dry-run -o yaml
-```
-
-Output:
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: my-app
-  namespace: default
+kubectl create-resource queue --from=existing-queue --dry-run
 ```
 
 ### Working with CRDs
@@ -107,9 +128,16 @@ Create custom resources the same way as built-in resources:
 # List to see your CRDs
 kubectl create-resource --list
 
-# Create a custom resource
-kubectl create-resource myresource.example.com --name=my-instance
+# Create using template from existing resource (recommended)
+kubectl create-resource queue --from=existing-queue --name=my-queue
+
+# Create with flags
+kubectl create-resource myresource.example.com \
+  --name=my-instance \
+  --set=spec.someField=value
 ```
+
+**Note on CRDs**: Some CRDs have minimal OpenAPI schemas but strict admission webhooks. If interactive mode doesn't prompt for required fields, use `--from` (template mode) or `--set` flags.
 
 ## Command Reference
 
@@ -117,14 +145,15 @@ kubectl create-resource myresource.example.com --name=my-instance
 kubectl create-resource [resource-type] [flags]
 
 Flags:
-      --dry-run           Only print the resource manifest without creating it
-  -h, --help              Help for kubectl-create-resource
-      --kubeconfig string Path to the kubeconfig file
-      --list              List all available resource types
-      --name string       Name of the resource to create
-  -n, --namespace string  Kubernetes namespace for the resource (default "default")
-  -o, --output string     Output format (yaml or json) - implies dry-run
-      --set stringArray   Set field values (e.g., --set=spec.replicas=3)
+      --dry-run             Only print the resource manifest without creating it
+      --from string         Use an existing resource as a template (opens in editor)
+  -h, --help                Help for kubectl-create-resource
+      --kubeconfig string   Path to the kubeconfig file
+      --list                List all available resource types
+      --name string         Name of the resource to create
+  -n, --namespace string    Kubernetes namespace for the resource (default "default")
+  -o, --output string       Output format (yaml or json) - implies dry-run
+      --set stringArray     Set field values (e.g., --set=spec.replicas=3)
 ```
 
 ## Examples
@@ -153,29 +182,38 @@ kubectl create-resource secret \
 kubectl create-resource service \
   --name=my-service \
   --set=spec.selector.app=my-app \
-  --set=spec.ports[0].port=80 \
-  --set=spec.ports[0].targetPort=8080
+  --set='spec.ports[0].port=80' \
+  --set='spec.ports[0].targetPort=8080'
 ```
 
-### Create a Namespace
+### Clone a Deployment
 
 ```bash
-kubectl create-resource namespace --name=my-namespace
+# Clone with new name
+kubectl create-resource deployment --from=nginx --name=nginx-clone
+
+# Clone to different namespace
+kubectl create-resource deployment --from=nginx -n production --name=nginx-prod
 ```
 
-### Create a ServiceAccount
+### Create a CRD Instance from Template
 
 ```bash
-kubectl create-resource serviceaccount --name=my-sa --namespace=kube-system
+# Clone an existing Queue (Run:AI/Kueue)
+kubectl create-resource queue --from=default-queue --name=my-team-queue
+
+# Preview first
+kubectl create-resource queue --from=default-queue --name=my-team-queue --dry-run
 ```
 
 ## How It Works
 
 1. **Discovery**: Queries the Kubernetes API to discover all available resource types, including CRDs
-2. **Schema Fetching**: Retrieves the OpenAPI schema for the selected resource type
-3. **Field Collection**: Collects values either from `--set` flags or interactive prompts
-4. **Manifest Generation**: Builds an unstructured Kubernetes manifest
-5. **Creation**: Applies the manifest to the cluster using the dynamic client
+2. **Template Fetch** (if `--from`): Fetches existing resource, cleans server-generated fields
+3. **Schema Fetching**: Retrieves the OpenAPI schema for the selected resource type
+4. **Editor/Prompts**: Opens editor for templates, or prompts for fields interactively
+5. **Manifest Generation**: Builds an unstructured Kubernetes manifest
+6. **Creation**: Applies the manifest to the cluster using the dynamic client
 
 ## Development
 

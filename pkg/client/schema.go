@@ -3,6 +3,7 @@ package client
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 
@@ -19,13 +20,13 @@ type ResourceSchema struct {
 
 // FieldSchema represents a field in a resource schema
 type FieldSchema struct {
-	Path        string      // JSON path (e.g., "spec.replicas")
-	Name        string      // Field name (e.g., "replicas")
-	Type        string      // Field type (string, integer, boolean, array, object)
-	Description string      // Field description
-	Required    bool        // Whether the field is required
-	Default     interface{} // Default value if any
-	Items       *FieldSchema // For arrays, the schema of items
+	Path        string        // JSON path (e.g., "spec.replicas")
+	Name        string        // Field name (e.g., "replicas")
+	Type        string        // Field type (string, integer, boolean, array, object)
+	Description string        // Field description
+	Required    bool          // Whether the field is required
+	Default     interface{}   // Default value if any
+	Items       *FieldSchema  // For arrays, the schema of items
 	Properties  []FieldSchema // For objects, nested properties
 }
 
@@ -34,51 +35,100 @@ func GetSchema(discoveryClient discovery.DiscoveryInterface, gvr schema.GroupVer
 	// Get the OpenAPI v3 client
 	openAPIClient := discoveryClient.OpenAPIV3()
 	if openAPIClient == nil {
-		return nil, fmt.Errorf("OpenAPI v3 not available")
+		fmt.Fprintf(os.Stderr, "Note: OpenAPI v3 not available, using basic schema\n")
+		return createBasicSchema(gvrToGVK(gvr)), nil
 	}
 
 	// Get the paths
 	paths, err := openAPIClient.Paths()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get OpenAPI paths: %w", err)
+		fmt.Fprintf(os.Stderr, "Note: Failed to get OpenAPI paths: %v\n", err)
+		return createBasicSchema(gvrToGVK(gvr)), nil
 	}
 
-	// Find the schema for this resource
-	gvk := schema.GroupVersionKind{
-		Group:   gvr.Group,
-		Version: gvr.Version,
-		Kind:    gvrToKind(gvr),
-	}
+	gvk := gvrToGVK(gvr)
+
+	// Build target path patterns to search for
+	targetPatterns := buildTargetPaths(gvr)
 
 	// Try to find the schema in the OpenAPI spec
-	schemaRef := gvkToSchemaRef(gvk)
-	
+	var matchedPath string
 	for pathKey, pathValue := range paths {
-		// Look for the API group path
-		if !matchesAPIPath(pathKey, gvr) {
+		// Check if this path matches any of our target patterns
+		matched := false
+		for _, pattern := range targetPatterns {
+			if strings.Contains(pathKey, pattern) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
 			continue
 		}
+		matchedPath = pathKey
 
-		schema, err := pathValue.Schema("application/json")
+		schemaBytes, err := pathValue.Schema("application/json")
 		if err != nil {
+			fmt.Fprintf(os.Stderr, "Note: Failed to get schema from %s: %v\n", pathKey, err)
 			continue
 		}
 
 		// Parse the schema
-		resourceSchema, err := parseOpenAPISchema(schema, gvk, schemaRef)
+		resourceSchema, err := parseOpenAPISchema(schemaBytes, gvk, gvr)
 		if err != nil {
+			fmt.Fprintf(os.Stderr, "Note: Failed to parse schema from %s: %v\n", pathKey, err)
 			continue
 		}
 
+		fmt.Fprintf(os.Stderr, "Found schema with %d fields from %s\n", len(resourceSchema.Fields), pathKey)
 		return resourceSchema, nil
 	}
 
-	// If we couldn't find the schema, return a basic schema with common fields
+	// If we couldn't find the schema, list available paths for debugging
+	if matchedPath == "" {
+		fmt.Fprintf(os.Stderr, "Note: No matching API path found for %s.%s/%s\n", gvr.Resource, gvr.Group, gvr.Version)
+		fmt.Fprintf(os.Stderr, "Looking for patterns: %v\n", targetPatterns)
+		// List paths that might be related
+		for pathKey := range paths {
+			if strings.Contains(strings.ToLower(pathKey), strings.ToLower(gvr.Group)) ||
+				strings.Contains(strings.ToLower(pathKey), gvr.Resource) {
+				fmt.Fprintf(os.Stderr, "  Available: %s\n", pathKey)
+			}
+		}
+	}
+	fmt.Fprintf(os.Stderr, "Using basic schema (name, namespace, labels, annotations)\n")
 	return createBasicSchema(gvk), nil
 }
 
+// buildTargetPaths builds possible API path patterns for a GVR
+func buildTargetPaths(gvr schema.GroupVersionResource) []string {
+	var patterns []string
+
+	if gvr.Group == "" {
+		// Core API
+		patterns = append(patterns, fmt.Sprintf("api/%s", gvr.Version))
+	} else {
+		// Named API groups - try multiple patterns
+		patterns = append(patterns, fmt.Sprintf("apis/%s/%s", gvr.Group, gvr.Version))
+		patterns = append(patterns, fmt.Sprintf("apis/%s", gvr.Group))
+		// Some OpenAPI specs use the group without version in the path
+		patterns = append(patterns, gvr.Group)
+	}
+
+	return patterns
+}
+
+// gvrToGVK converts a GVR to a GVK
+func gvrToGVK(gvr schema.GroupVersionResource) schema.GroupVersionKind {
+	return schema.GroupVersionKind{
+		Group:   gvr.Group,
+		Version: gvr.Version,
+		Kind:    resourceToKind(gvr.Resource),
+	}
+}
+
 // parseOpenAPISchema parses the OpenAPI schema bytes into a ResourceSchema
-func parseOpenAPISchema(schemaBytes []byte, gvk schema.GroupVersionKind, schemaRef string) (*ResourceSchema, error) {
+func parseOpenAPISchema(schemaBytes []byte, gvk schema.GroupVersionKind, gvr schema.GroupVersionResource) (*ResourceSchema, error) {
 	var openAPISpec map[string]interface{}
 	if err := json.Unmarshal(schemaBytes, &openAPISpec); err != nil {
 		return nil, err
@@ -95,24 +145,15 @@ func parseOpenAPISchema(schemaBytes []byte, gvk schema.GroupVersionKind, schemaR
 		return nil, fmt.Errorf("no schemas in components")
 	}
 
-	// Find the schema for our resource
-	var resourceDef map[string]interface{}
-	for name, def := range schemas {
-		if strings.Contains(name, schemaRef) || matchesGVK(name, gvk) {
-			if d, ok := def.(map[string]interface{}); ok {
-				resourceDef = d
-				break
-			}
-		}
-	}
-
+	// Find the schema for our resource using multiple strategies
+	resourceDef := findResourceSchema(schemas, gvk, gvr)
 	if resourceDef == nil {
-		return nil, fmt.Errorf("schema not found for %s", schemaRef)
+		return nil, fmt.Errorf("schema not found for %s.%s/%s", gvr.Resource, gvr.Group, gvr.Version)
 	}
 
 	// Extract fields from the schema
 	fields := extractFields(resourceDef, "", schemas)
-	
+
 	// Get description
 	description, _ := resourceDef["description"].(string)
 
@@ -121,6 +162,55 @@ func parseOpenAPISchema(schemaBytes []byte, gvk schema.GroupVersionKind, schemaR
 		Description: description,
 		Fields:      fields,
 	}, nil
+}
+
+// findResourceSchema searches for the resource schema using multiple strategies
+func findResourceSchema(schemas map[string]interface{}, gvk schema.GroupVersionKind, gvr schema.GroupVersionResource) map[string]interface{} {
+	// Strategy 1: Match by Kind suffix (works for most CRDs and built-in resources)
+	for name, def := range schemas {
+		if strings.HasSuffix(name, "."+gvk.Kind) {
+			if d, ok := def.(map[string]interface{}); ok {
+				// Verify it has properties (is a real resource schema)
+				if _, hasProps := d["properties"]; hasProps {
+					return d
+				}
+			}
+		}
+	}
+
+	// Strategy 2: Match by group components in schema name
+	// CRDs often use reversed domain notation: com.example.v1.MyResource
+	groupParts := strings.Split(gvr.Group, ".")
+	for name, def := range schemas {
+		nameLower := strings.ToLower(name)
+		// Check if schema name contains group parts and kind
+		matchesGroup := true
+		for _, part := range groupParts {
+			if !strings.Contains(nameLower, strings.ToLower(part)) {
+				matchesGroup = false
+				break
+			}
+		}
+		if matchesGroup && strings.Contains(nameLower, strings.ToLower(gvk.Kind)) {
+			if d, ok := def.(map[string]interface{}); ok {
+				if _, hasProps := d["properties"]; hasProps {
+					return d
+				}
+			}
+		}
+	}
+
+	// Strategy 3: Built-in Kubernetes resources
+	builtInRef := gvkToSchemaRef(gvk)
+	for name, def := range schemas {
+		if strings.Contains(name, builtInRef) {
+			if d, ok := def.(map[string]interface{}); ok {
+				return d
+			}
+		}
+	}
+
+	return nil
 }
 
 // extractFields recursively extracts field schemas from an OpenAPI definition
@@ -142,12 +232,18 @@ func extractFields(def map[string]interface{}, prefix string, allSchemas map[str
 		}
 	}
 
-	// Sort property names for consistent ordering
-	var propNames []string
+	// Sort property names for consistent ordering, but put required fields first
+	var requiredNames, optionalNames []string
 	for name := range properties {
-		propNames = append(propNames, name)
+		if requiredFields[name] {
+			requiredNames = append(requiredNames, name)
+		} else {
+			optionalNames = append(optionalNames, name)
+		}
 	}
-	sort.Strings(propNames)
+	sort.Strings(requiredNames)
+	sort.Strings(optionalNames)
+	propNames := append(requiredNames, optionalNames...)
 
 	for _, name := range propNames {
 		prop := properties[name]
@@ -156,7 +252,7 @@ func extractFields(def map[string]interface{}, prefix string, allSchemas map[str
 			continue
 		}
 
-		// Skip metadata, apiVersion, kind, and status as they're handled specially
+		// Skip apiVersion, kind, and status as they're handled specially
 		if prefix == "" && (name == "apiVersion" || name == "kind" || name == "status") {
 			continue
 		}
@@ -196,9 +292,17 @@ func extractFields(def map[string]interface{}, prefix string, allSchemas map[str
 			}
 		}
 
-		// Handle nested objects
-		if field.Type == "object" && len(field.Properties) == 0 {
-			field.Properties = extractFields(propDef, path, allSchemas)
+		// Handle nested objects with additionalProperties (maps)
+		if field.Type == "object" {
+			if addProps, ok := propDef["additionalProperties"].(map[string]interface{}); ok {
+				// This is a map type - mark it specially
+				if addType, ok := addProps["type"].(string); ok {
+					field.Description = fmt.Sprintf("Map of string to %s. %s", addType, field.Description)
+				}
+			} else if len(field.Properties) == 0 {
+				// Regular nested object
+				field.Properties = extractFields(propDef, path, allSchemas)
+			}
 		}
 
 		// Handle arrays
@@ -263,10 +367,18 @@ func createBasicSchema(gvk schema.GroupVersionKind) *ResourceSchema {
 	}
 }
 
-// gvrToKind converts a GVR to a Kind name
-func gvrToKind(gvr schema.GroupVersionResource) string {
-	// Simple heuristic: remove trailing 's' and capitalize
-	resource := gvr.Resource
+// resourceToKind converts a resource name to Kind
+func resourceToKind(resource string) string {
+	// Handle common irregulars
+	irregulars := map[string]string{
+		"endpoints": "Endpoints",
+		"queues":    "Queue",
+	}
+	if kind, ok := irregulars[resource]; ok {
+		return kind
+	}
+
+	// Standard conversion: remove plural suffix and capitalize
 	if strings.HasSuffix(resource, "ies") {
 		resource = strings.TrimSuffix(resource, "ies") + "y"
 	} else if strings.HasSuffix(resource, "ses") {
@@ -274,21 +386,20 @@ func gvrToKind(gvr schema.GroupVersionResource) string {
 	} else if strings.HasSuffix(resource, "s") {
 		resource = strings.TrimSuffix(resource, "s")
 	}
-	
+
 	// Capitalize first letter
 	if len(resource) > 0 {
 		resource = strings.ToUpper(resource[:1]) + resource[1:]
 	}
-	
+
 	return resource
 }
 
-// gvkToSchemaRef converts a GVK to an OpenAPI schema reference name
+// gvkToSchemaRef converts a GVK to an OpenAPI schema reference name for built-in resources
 func gvkToSchemaRef(gvk schema.GroupVersionKind) string {
 	if gvk.Group == "" {
 		return fmt.Sprintf("io.k8s.api.core.%s.%s", gvk.Version, gvk.Kind)
 	}
-	// Convert group to schema format (e.g., apps -> io.k8s.api.apps.v1.Deployment)
 	groupParts := strings.Split(gvk.Group, ".")
 	return fmt.Sprintf("io.k8s.api.%s.%s.%s", groupParts[0], gvk.Version, gvk.Kind)
 }
@@ -299,9 +410,4 @@ func matchesAPIPath(path string, gvr schema.GroupVersionResource) bool {
 		return strings.Contains(path, fmt.Sprintf("/api/%s", gvr.Version))
 	}
 	return strings.Contains(path, fmt.Sprintf("/apis/%s/%s", gvr.Group, gvr.Version))
-}
-
-// matchesGVK checks if a schema name matches a GVK
-func matchesGVK(schemaName string, gvk schema.GroupVersionKind) bool {
-	return strings.HasSuffix(schemaName, "."+gvk.Kind)
 }

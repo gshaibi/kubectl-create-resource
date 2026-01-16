@@ -148,8 +148,8 @@ func (c *K8sClient) ResolveResourceType(resourceType string) (schema.GroupVersio
 		resourceKind := strings.ToLower(r.Kind)
 
 		// Match by name (plural) or kind (singular)
-		if resourceName == name || resourceKind == name || 
-		   resourceName == name+"s" || resourceKind+"s" == name {
+		if resourceName == name || resourceKind == name ||
+			resourceName == name+"s" || resourceKind+"s" == name {
 			if group == "" || strings.EqualFold(r.Group, group) {
 				matches = append(matches, r)
 			}
@@ -180,7 +180,7 @@ func (c *K8sClient) ResolveResourceType(resourceType string) (schema.GroupVersio
 				options = append(options, fmt.Sprintf("%s.%s", m.Name, m.Group))
 			}
 		}
-		return schema.GroupVersionResource{}, fmt.Errorf("ambiguous resource type %q, specify group: %s", 
+		return schema.GroupVersionResource{}, fmt.Errorf("ambiguous resource type %q, specify group: %s",
 			resourceType, strings.Join(options, ", "))
 	}
 
@@ -200,20 +200,9 @@ func (c *K8sClient) GetResourceSchema(gvr schema.GroupVersionResource) (*Resourc
 // CreateResource creates a resource in the cluster
 func (c *K8sClient) CreateResource(gvr schema.GroupVersionResource, namespace string, obj *unstructured.Unstructured) (*unstructured.Unstructured, error) {
 	ctx := context.Background()
-	
-	// Determine if resource is namespaced
-	resources, err := c.DiscoverResources()
-	if err != nil {
-		return nil, err
-	}
 
-	var namespaced bool
-	for _, r := range resources {
-		if r.Name == gvr.Resource && r.Group == gvr.Group {
-			namespaced = r.Namespaced
-			break
-		}
-	}
+	// Determine if resource is namespaced
+	namespaced := c.isNamespaced(gvr)
 
 	var resourceInterface dynamic.ResourceInterface
 	if namespaced {
@@ -223,6 +212,82 @@ func (c *K8sClient) CreateResource(gvr schema.GroupVersionResource, namespace st
 	}
 
 	return resourceInterface.Create(ctx, obj, metav1.CreateOptions{})
+}
+
+// GetResource fetches an existing resource and returns it as unstructured
+func (c *K8sClient) GetResource(gvr schema.GroupVersionResource, namespace, name string) (*unstructured.Unstructured, error) {
+	ctx := context.Background()
+
+	// Determine if resource is namespaced
+	namespaced := c.isNamespaced(gvr)
+
+	var resourceInterface dynamic.ResourceInterface
+	if namespaced {
+		resourceInterface = c.dynamicClient.Resource(gvr).Namespace(namespace)
+	} else {
+		resourceInterface = c.dynamicClient.Resource(gvr)
+	}
+
+	// Get the resource
+	return resourceInterface.Get(ctx, name, metav1.GetOptions{})
+}
+
+// GetResourceSpec fetches an existing resource and returns its spec as a flat map
+func (c *K8sClient) GetResourceSpec(gvr schema.GroupVersionResource, namespace, name string) (map[string]interface{}, error) {
+	obj, err := c.GetResource(gvr, namespace, name)
+	if err != nil {
+		return nil, err
+	}
+
+	// Extract and flatten the spec
+	result := make(map[string]interface{})
+
+	// Flatten spec fields
+	if spec, ok := obj.Object["spec"].(map[string]interface{}); ok {
+		flattenMap(spec, "spec", result)
+	}
+
+	return result, nil
+}
+
+// isNamespaced checks if a resource type is namespaced
+func (c *K8sClient) isNamespaced(gvr schema.GroupVersionResource) bool {
+	resources, err := c.DiscoverResources()
+	if err != nil {
+		return true // Default to namespaced
+	}
+
+	for _, r := range resources {
+		if r.Name == gvr.Resource && r.Group == gvr.Group {
+			return r.Namespaced
+		}
+	}
+	return true
+}
+
+// flattenMap flattens a nested map into dot-notation paths
+func flattenMap(m map[string]interface{}, prefix string, result map[string]interface{}) {
+	for k, v := range m {
+		path := prefix + "." + k
+		switch val := v.(type) {
+		case map[string]interface{}:
+			// Recurse into nested maps
+			flattenMap(val, path, result)
+		case []interface{}:
+			// Handle arrays - store the whole array and also individual items
+			result[path] = val
+			for i, item := range val {
+				itemPath := fmt.Sprintf("%s[%d]", path, i)
+				if itemMap, ok := item.(map[string]interface{}); ok {
+					flattenMap(itemMap, itemPath, result)
+				} else {
+					result[itemPath] = item
+				}
+			}
+		default:
+			result[path] = val
+		}
+	}
 }
 
 // containsVerb checks if a verb is in the list
