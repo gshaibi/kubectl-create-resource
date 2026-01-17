@@ -25,30 +25,31 @@ jobs:
       - name: Build binaries
         run: |
           mkdir -p dist
+          cp LICENSE dist/
           
           # Darwin AMD64
           GOOS=darwin GOARCH=amd64 go build -ldflags="-X main.version=${{ github.ref_name }}" -o dist/kubectl-create-resource ./cmd/kubectl-create-resource
-          tar -czvf dist/kubectl-create-resource-darwin-amd64.tar.gz -C dist kubectl-create-resource
+          tar -czvf dist/kubectl-create-resource-darwin-amd64.tar.gz -C dist kubectl-create-resource LICENSE
           rm dist/kubectl-create-resource
           
           # Darwin ARM64
           GOOS=darwin GOARCH=arm64 go build -ldflags="-X main.version=${{ github.ref_name }}" -o dist/kubectl-create-resource ./cmd/kubectl-create-resource
-          tar -czvf dist/kubectl-create-resource-darwin-arm64.tar.gz -C dist kubectl-create-resource
+          tar -czvf dist/kubectl-create-resource-darwin-arm64.tar.gz -C dist kubectl-create-resource LICENSE
           rm dist/kubectl-create-resource
           
           # Linux AMD64
           GOOS=linux GOARCH=amd64 go build -ldflags="-X main.version=${{ github.ref_name }}" -o dist/kubectl-create-resource ./cmd/kubectl-create-resource
-          tar -czvf dist/kubectl-create-resource-linux-amd64.tar.gz -C dist kubectl-create-resource
+          tar -czvf dist/kubectl-create-resource-linux-amd64.tar.gz -C dist kubectl-create-resource LICENSE
           rm dist/kubectl-create-resource
           
           # Linux ARM64
           GOOS=linux GOARCH=arm64 go build -ldflags="-X main.version=${{ github.ref_name }}" -o dist/kubectl-create-resource ./cmd/kubectl-create-resource
-          tar -czvf dist/kubectl-create-resource-linux-arm64.tar.gz -C dist kubectl-create-resource
+          tar -czvf dist/kubectl-create-resource-linux-arm64.tar.gz -C dist kubectl-create-resource LICENSE
           rm dist/kubectl-create-resource
           
           # Windows AMD64
           GOOS=windows GOARCH=amd64 go build -ldflags="-X main.version=${{ github.ref_name }}" -o dist/kubectl-create-resource.exe ./cmd/kubectl-create-resource
-          cd dist && zip kubectl-create-resource-windows-amd64.zip kubectl-create-resource.exe && cd ..
+          cd dist && zip kubectl-create-resource-windows-amd64.zip kubectl-create-resource.exe LICENSE && cd ..
           rm dist/kubectl-create-resource.exe
 
       - name: Generate checksums
